@@ -1,0 +1,61 @@
+stateDiagram-v2
+    direction TB
+
+    [*] --> EmConciliacao : criarTermo(vagaId)
+
+    state "EmConciliacao" as EmConciliacao
+    EmConciliacao : entry / carregarVagaECandidaturas()
+    EmConciliacao : do / calcularAfinidade()
+    EmConciliacao : exit / registrarAuditoria()
+
+    EmConciliacao --> MatchSugerido : conciliacaoConcluida [melhorScore >= limiar] / publicarMatchRealizado()
+    EmConciliacao --> SemMatch : conciliacaoConcluida [melhorScore < limiar OU qtdElegiveis == 0] / publicarSemMatch()
+
+    SemMatch --> EmConciliacao : reprocessar [tentativas < 3] / incrementarTentativas()
+    SemMatch --> Cancelado : reprocessar [tentativas >= 3] / arquivarTermo()
+
+    state "MatchSugerido" as MatchSugerido
+    MatchSugerido : entry / iniciarPrazoAceite(72h)
+    MatchSugerido : exit / cancelarPrazoAceite()
+
+    MatchSugerido --> EmAssinatura : aceitesRecebidos [aceiteAluno E aceiteEmpresa] / gerarMinutaEEnvelope()
+    MatchSugerido --> Recusado : recusaRecebida [recusaAluno OU recusaEmpresa] / liberarCandidato()
+    MatchSugerido --> Expirado : prazoAceiteExcedido [agora > prazoAceite] / notificarPartes()
+
+    state EmAssinatura {
+        direction LR
+        [*] --> AlunoPendente
+        AlunoPendente --> AlunoAssinou : assinaturaConfirmada [signatario == ALUNO] / registrarAssinatura()
+        AlunoAssinou --> [*]
+        --
+        [*] --> EmpresaPendente
+        EmpresaPendente --> EmpresaAssinou : assinaturaConfirmada [signatario == EMPRESA] / registrarAssinatura()
+        EmpresaAssinou --> [*]
+        --
+        [*] --> CoordenacaoPendente
+        CoordenacaoPendente --> CoordenacaoAssinou : assinaturaConfirmada [signatario == COORDENACAO] / registrarAssinatura()
+        CoordenacaoAssinou --> [*]
+    }
+
+    EmAssinatura --> Vigente : todasAssinaturasConfirmadas [totalAssinaturas == 3] / ativarVigencia()
+    EmAssinatura --> Cancelado : assinaturaRecusada [recusaSignatario] / cancelarEnvelope()
+    EmAssinatura --> Expirado : prazoAssinaturaExcedido [agora > prazoAssinatura] / cancelarEnvelope()
+
+    state "Vigente" as Vigente
+    Vigente : entry / publicarTermoVigente()
+    Vigente : do / monitorarVigencia()
+
+    Vigente --> Concluido : fimVigencia [hoje >= dataFim] / emitirRelatorioFinal()
+    Vigente --> Rescindido : rescisaoSolicitada [motivoValido] / notificarPartes()
+
+    Recusado --> [*]
+    Expirado --> [*]
+    Cancelado --> [*]
+    Concluido --> [*]
+    Rescindido --> [*]
+
+    note right of EmAssinatura
+        Regioes concorrentes (Fork/Join).
+        Saida somente quando as 3 regioes
+        atingem o estado final (Join).
+    end note

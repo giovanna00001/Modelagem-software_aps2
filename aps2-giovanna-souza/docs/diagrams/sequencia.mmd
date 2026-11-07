@@ -1,0 +1,90 @@
+sequenceDiagram
+    autonumber
+    actor Coord as Coordenador UniSenai
+    participant Web as PortalWeb (React SPA)
+    participant Ctrl as ConciliacaoController
+    participant CS as ConciliacaoService
+    participant Repo as EstagioRepository
+    participant Acad as SistemaAcademicoClient
+    participant ME as MatchEngine (gRPC)
+    participant MQ as BrokerRabbitMQ
+    participant Notif as NotificacaoService
+    participant CCtrl as ContratoController
+    participant CT as ContratoService
+    participant Prov as ProvedorAssinatura
+
+    Note over Coord,Notif: FASE 1 - Conciliacao (Match) de Competencias
+
+    Coord->>Web: selecionarVaga(vagaId)
+    Web->>Ctrl: executar(ConciliacaoRequestDTO)
+    Ctrl->>CS: executarConciliacao(ConciliacaoRequestDTO)
+    CS->>Repo: criarTermo(vagaId)
+    Repo-->>CS: TermoEstagioDTO (estado EM_CONCILIACAO)
+    CS->>Repo: buscarVaga(vagaId)
+    Repo-->>CS: VagaDTO
+    CS->>Repo: buscarCandidaturas(vagaId)
+    Repo-->>CS: List~CandidaturaDTO~
+    CS->>Acad: consultarElegibilidade(List~alunoId~)
+    Acad-->>CS: List~ElegibilidadeDTO~
+
+    loop para cada candidatura elegivel
+        CS->>ME: calcularAfinidade(VagaDTO, CandidaturaDTO)
+        ME-->>CS: ResultadoMatchDTO (alunoId, score)
+    end
+
+    CS->>CS: selecionarMelhorMatch(List~ResultadoMatchDTO~)
+
+    alt melhorScore >= limiar (0.70)
+        CS->>Repo: atualizarEstado(termoId, MATCH_SUGERIDO, ResultadoMatchDTO)
+        Repo-->>CS: TermoEstagioDTO
+        CS->>Repo: atualizarSituacaoCandidatura(candidaturaId, SELECIONADA)
+        Repo-->>CS: CandidaturaDTO
+        CS-)MQ: publicar(MatchRealizadoEvent)
+        MQ-)Notif: tratarMatchRealizado(MatchRealizadoEvent)
+        CS-->>Ctrl: ConciliacaoResponseDTO (MATCH_SUGERIDO)
+    else melhorScore < limiar ou sem candidaturas elegiveis
+        CS->>Repo: atualizarEstado(termoId, SEM_MATCH, null)
+        Repo-->>CS: TermoEstagioDTO
+        CS-)MQ: publicar(SemMatchEvent)
+        MQ-)Notif: tratarSemMatch(SemMatchEvent)
+        CS-->>Ctrl: ConciliacaoResponseDTO (SEM_MATCH)
+    end
+
+    Ctrl-->>Web: ConciliacaoResponseDTO
+    Web-->>Coord: exibirResultado()
+
+    Note over Web,Prov: FASE 2 - Aceite das partes e Assinatura do Contrato (TCE)
+
+    Web->>CCtrl: aceitar(AceiteDTO)
+    CCtrl->>CT: registrarAceite(AceiteDTO)
+    CT->>Repo: registrarAceite(termoId, parte)
+    Repo-->>CT: TermoEstagioDTO
+
+    alt recusa de qualquer parte [recusa == true]
+        CT->>Repo: atualizarEstado(termoId, RECUSADO, null)
+        CT-)MQ: publicar(MatchRecusadoEvent)
+        CT-->>CCtrl: AceiteResultadoDTO (RECUSADO)
+    else aceites completos [aceiteAluno e aceiteEmpresa]
+        CT->>Repo: atualizarEstado(termoId, EM_ASSINATURA, null)
+        CT->>Prov: criarEnvelope(MinutaDTO)
+        Prov-->>CT: EnvelopeDTO (envelopeId, signatarios)
+        CT-)MQ: publicar(AssinaturaSolicitadaEvent)
+        CT-->>CCtrl: AceiteResultadoDTO (EM_ASSINATURA)
+    else aguardando a outra parte
+        CT-->>CCtrl: AceiteResultadoDTO (MATCH_SUGERIDO)
+    end
+    CCtrl-->>Web: AceiteResultadoDTO
+
+    loop para cada signatario (aluno, empresa, coordenacao)
+        Prov-)CT: confirmarAssinatura(AssinaturaEventoDTO)
+        CT->>Repo: registrarAssinatura(termoId, signatarioId)
+        Repo-->>CT: TermoEstagioDTO
+
+        alt todas as assinaturas confirmadas [totalAssinaturas == 3]
+            CT->>Repo: atualizarEstado(termoId, VIGENTE, null)
+            CT-)MQ: publicar(TermoVigenteEvent)
+            MQ-)Notif: tratarTermoVigente(TermoVigenteEvent)
+        else assinaturas pendentes [totalAssinaturas < 3]
+            CT->>CT: aguardarProximaAssinatura(termoId)
+        end
+    end

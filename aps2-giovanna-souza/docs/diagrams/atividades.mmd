@@ -1,0 +1,95 @@
+flowchart TB
+    INI(("●")):::ini
+
+    subgraph L1["Raia 1 - Coordenação UniSenai"]
+        direction TB
+        A1["Selecionar vaga e<br/>solicitar conciliação"]
+        A9["Tratar sem match<br/>(revisar vaga/perfis)"]
+    end
+
+    subgraph L2["Raia 2 - Sistema Back-End (API de Estágios)"]
+        direction TB
+        S1["executarConciliacao():<br/>criar Termo [EM_CONCILIACAO]"]
+        S2["Carregar vaga e<br/>candidaturas"]
+        D1{"Há candidatos<br/>elegíveis?"}
+        S3["calcularAfinidade() por candidato<br/>(score ponderado)"]
+        D2{"Melhor score<br/>vs. limiar?"}
+        S4["Termo [MATCH_SUGERIDO]<br/>publicar MatchRealizadoEvent"]
+        S5["Termo [SEM_MATCH]<br/>publicar SemMatchEvent"]
+        F1@{ shape: fork, label: " " }
+        J1@{ shape: join, label: " " }
+        D3{"Aceites das<br/>partes?"}
+        S6["registrarAceite():<br/>consolidar decisões"]
+        S7["Termo [EM_ASSINATURA]<br/>gerar minuta (MinutaDTO)"]
+        F2@{ shape: fork, label: " " }
+        J2@{ shape: join, label: " " }
+        D4{"Assinaturas<br/>concluídas?"}
+        S8["Termo [VIGENTE]<br/>publicar TermoVigenteEvent"]
+        S9["Termo [RECUSADO]<br/>liberar candidato"]
+        S10["Termo [EXPIRADO]<br/>(prazoAssinatura excedido)<br/>cancelar envelope"]
+    end
+
+    subgraph L3["Raia 3 - Estudante"]
+        direction TB
+        E1["Avaliar vaga sugerida<br/>e registrar aceite/recusa"]
+        E2["Assinar TCE (ou deixar<br/>o prazo expirar)"]
+    end
+
+    subgraph L4["Raia 4 - Empresa Concedente"]
+        direction TB
+        P1["Avaliar candidato sugerido<br/>e registrar aceite/recusa"]
+        P2["Assinar TCE (ou deixar<br/>o prazo expirar)"]
+    end
+
+    subgraph L5["Raia 5 - Serviços Externos"]
+        direction TB
+        X1["Sistema Acadêmico:<br/>consultarElegibilidade()"]
+        X2["Provedor de Assinatura:<br/>criarEnvelope() e coletar assinaturas"]
+        X3["Coordenação assina TCE<br/>via Provedor de Assinatura"]
+    end
+
+    FIM_OK(("◉")):::fim
+    FIM_NOK(("◉")):::fim
+
+    INI --> A1
+    A1 --> S1
+    S1 --> S2
+    S2 --> X1
+    X1 --> D1
+    D1 -->|"[qtdElegiveis > 0]"| S3
+    D1 -->|"[qtdElegiveis == 0]"| S5
+    S3 --> D2
+    D2 -->|"[melhorScore >= limiar]"| S4
+    D2 -->|"[melhorScore < limiar]"| S5
+    S5 --> A9
+    A9 --> FIM_NOK
+
+    %% Fork 1 - aceites paralelos
+    S4 --> F1
+    F1 --> E1
+    F1 --> P1
+    E1 --> J1
+    P1 --> J1
+    J1 --> S6
+    S6 --> D3
+    D3 -->|"[aceiteAluno AND aceiteEmpresa]"| S7
+    D3 -->|"[NOT (aceiteAluno AND aceiteEmpresa)]"| S9
+    S9 --> FIM_NOK
+
+    %% Fork 2 - assinaturas paralelas
+    S7 --> X2
+    X2 --> F2
+    F2 --> E2
+    F2 --> P2
+    F2 --> X3
+    E2 --> J2
+    P2 --> J2
+    X3 --> J2
+    J2 --> D4
+    D4 -->|"[totalAssinaturas == 3]"| S8
+    D4 -->|"[totalAssinaturas < 3]"| S10
+    S8 --> FIM_OK
+    S10 --> FIM_NOK
+
+    classDef ini fill:#000,stroke:#000,color:#000
+    classDef fim fill:#fff,stroke:#000,stroke-width:3px,color:#000

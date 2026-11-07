@@ -1,0 +1,32 @@
+C4Container
+    title Nivel 2 - Containers: Conciliacao de Competencias e Assinatura de Contrato (TCE)
+
+    Person(aluno, "Estudante", "Mantem perfil, aceita/recusa match e assina o TCE")
+    Person(empresa, "Representante da Empresa", "Publica vagas, aceita/recusa candidato e assina o TCE")
+    Person(coord, "Coordenador de Estagios", "Dispara conciliacao e assina o TCE")
+
+    System_Boundary(sis, "Gestao de Estagios UniSenai") {
+        Container(spa, "PortalWeb", "React 18, TypeScript, Vite", "SPA de estudantes, empresas e coordenacao")
+        Container(api, "API de Estagios", "Node.js 20, NestJS 10", "Conciliacao, Contrato e maquina de estados do TermoEstagio")
+        Container(match, "MatchEngine", "Python 3.12, grpcio", "Calcula score de afinidade ponderado")
+        ContainerQueue(mq, "BrokerRabbitMQ", "RabbitMQ 3.13", "Exchange topic estagios.eventos")
+        Container(worker, "NotificacaoService", "Node.js 20, amqplib", "Consome eventos e envia notificacoes")
+        ContainerDb(db, "Banco de Dados", "PostgreSQL 16", "Termos, vagas, candidaturas, competencias, assinaturas e outbox")
+    }
+
+    System_Ext(acad, "Sistema Academico UniSenai", "Matricula, periodo e situacao do aluno")
+    System_Ext(prov, "ProvedorAssinatura", "Assinatura digital (envelopes e webhooks)")
+    System_Ext(smtp, "Servico de E-mail", "E-mails transacionais")
+
+    Rel(aluno, spa, "Usa", "HTTPS")
+    Rel(empresa, spa, "Usa", "HTTPS")
+    Rel(coord, spa, "Usa", "HTTPS")
+    Rel(spa, api, "Executa conciliacao e registra aceites", "JSON/REST, HTTPS, JWT")
+    Rel(api, match, "calcularAfinidade()", "gRPC, HTTP/2 TLS, sincrono")
+    Rel(api, db, "Le e grava termos, estados e outbox", "SQL, TCP 5432 TLS")
+    Rel(api, acad, "consultarElegibilidade()", "REST, HTTPS, OAuth2")
+    Rel(api, prov, "criarEnvelope()", "REST, HTTPS, API key")
+    Rel(prov, api, "confirmarAssinatura()", "Webhook HTTPS, HMAC-SHA256, assincrono")
+    Rel(api, mq, "publicar(Evento) via Outbox Relay", "AMQP 0-9-1 TLS, assincrono")
+    Rel(mq, worker, "Entrega eventos de dominio", "AMQP 0-9-1 TLS, assincrono")
+    Rel(worker, smtp, "Envia e-mails", "SMTPS 587")
